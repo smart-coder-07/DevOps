@@ -13,7 +13,7 @@ RUN npm ci
 COPY . .
 
 # Build Angular (production)
-RUN npm run build --configuration production
+RUN npm run build
 
 
 # ========== Stage 2: Serve with Nginx ==========
@@ -23,7 +23,7 @@ FROM nginx:alpine
 RUN rm -rf /usr/share/nginx/html/*
 
 # Copy Angular build output to Nginx HTML folder
-COPY --from=build /app/dist/my-app /usr/share/nginx/html
+COPY --from=build /app/dist/my-app/browser /usr/share/nginx/html
 
 # Expose port 80
 EXPOSE 80
