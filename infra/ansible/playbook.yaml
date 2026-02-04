@@ -1,0 +1,91 @@
+- hosts: jenkins_vm
+  become: true
+  vars:
+    jenkins_dir: /opt/jenkins
+    jenkins_http_port: 8080
+
+    # Change these securely (recommended: use Ansible Vault later)
+    jenkins_admin_password: "ChangeMe_Strong_Password_123!"
+    github_repo_url: "https://github.com/smart-coder-07/DevOpsbranch.git"
+    github_token: "PASTE_GITHUB_PAT_HERE"   # needs repo read + webhook (classic: repo, admin:repo_hook)
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+          - apt-transport-https
+        state: present
+
+    - name: Install Docker (Ubuntu)
+      shell: |
+        set -e
+        if ! command -v docker >/dev/null 2>&1; then
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+            $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+          apt-get update -y
+          apt-get install -y docker-ce docker-ce-cli containerd.io
+        fi
+
+    - name: Enable & start docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Create Jenkins directory
+      file:
+        path: "{{ jenkins_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy Jenkins Dockerfile
+      copy:
+        src: files/jenkins/Dockerfile
+        dest: "{{ jenkins_dir }}/Dockerfile"
+
+    - name: Copy Jenkins plugins list
+      copy:
+        src: files/jenkins/plugins.txt
+        dest: "{{ jenkins_dir }}/plugins.txt"
+
+    - name: Copy Jenkins casc.yaml
+      copy:
+        src: files/jenkins/casc.yaml
+        dest: "{{ jenkins_dir }}/casc.yaml"
+
+    - name: Build Jenkins custom image
+      shell: |
+        docker build -t my-jenkins:latest {{ jenkins_dir }}
+
+    - name: Run Jenkins container (Docker-in-Docker via socket)
+      shell: |
+        docker rm -f jenkins || true
+        docker run -d --name jenkins --restart=always \
+          -p {{ jenkins_http_port }}:8080 \
+          -p 50000:50000 \
+          -v jenkins_home:/var/jenkins_home \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v {{ jenkins_dir }}/casc.yaml:/var/jenkins_home/casc.yaml \
+          -e CASC_JENKINS_CONFIG=/var/jenkins_home/casc.yaml \
+          -e JENKINS_ADMIN_PASSWORD='{{ jenkins_admin_password }}' \
+          -e GITHUB_REPO_URL='{{ github_repo_url }}' \
+          -e GITHUB_TOKEN='{{ github_token }}' \
+          my-jenkins:latest
+
+    - name: Wait for Jenkins to be ready
+      uri:
+        url: "http://localhost:{{ jenkins_http_port }}/login"
+        status_code: 200
+      register: result
+      retries: 30
+      delay: 5
+      until: result.status == 200
